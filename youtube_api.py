@@ -1,63 +1,92 @@
 """
 TubePulse - YouTube Data API v3 Ingestion Module
 Handles video metadata retrieval and paginated comment ingestion.
-Operates seamlessly with pre-staged datasets or live API via environment variable.
+Uses Python's standard library urllib for zero-dependency live API calls,
+ensuring it works out of the box without requiring external client packages.
 """
 
 import os
 import re
+import json
+from urllib.parse import urlparse, parse_qs, quote
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 import pandas as pd
 
-def extract_video_id(url_or_id: str) -> str:
-    """Extract YouTube video ID from various URL formats or raw ID."""
-    if not url_or_id:
-        return "kY4L4z3YVb8"
-    
-    clean_input = url_or_id.strip()
-    patterns = [
-        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
-        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',
-        r'(?:embed\/)([0-9A-Za-z_-]{11})',
-        r'(?:shorts\/)([0-9A-Za-z_-]{11})',
-        r'^([0-9A-Za-z_-]{11})$'
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, clean_input)
-        if match:
-            return match.group(1)
-    return clean_input[:11] if len(clean_input) >= 11 else "kY4L4z3YVb8"
+def _load_env_file():
+    """Automatically loads .env file into os.environ if present."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(base_dir, ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, val = line.split("=", 1)
+                        key = key.strip()
+                        val = val.strip().strip('"').strip("'").strip()
+                        if key:
+                            os.environ[key] = val
+        except Exception:
+            pass
 
-def get_fallback_data(scenario_type: str = "controversial"):
-    """Load local pre-staged CSV files for reliable zero-config evaluation."""
+_load_env_file()
+
+def get_api_key() -> str:
+    """Returns the YouTube API key from environment, ensuring .env is re-checked."""
+    _load_env_file()
+    return os.getenv("YOUTUBE_API_KEY", "").strip()
+
+def extract_video_id(url_or_id: str) -> str:
+    """Extract YouTube video ID from any URL format or raw ID."""
+    clean = url_or_id.strip()
+    if not clean:
+        return "dQw4w9WgXcQ"
+    
+    if re.match(r'^[0-9A-Za-z_-]{11}$', clean):
+        return clean
+
+    try:
+        parsed = urlparse(clean)
+        if "youtube.com" in parsed.netloc:
+            qs = parse_qs(parsed.query)
+            if "v" in qs and qs["v"]:
+                return qs["v"][0][:11]
+            parts = [p for p in parsed.path.split("/") if p]
+            if len(parts) >= 2 and parts[0] in ["shorts", "embed", "v"]:
+                return parts[1][:11]
+
+        if "youtu.be" in parsed.netloc:
+            parts = [p for p in parsed.path.split("/") if p]
+            if parts:
+                return parts[0][:11]
+    except Exception:
+        pass
+
+    v_param = re.search(r'[?&]v=([0-9A-Za-z_-]{11})', clean)
+    if v_param:
+        return v_param.group(1)
+
+    token = re.search(r'([0-9A-Za-z_-]{11})', clean)
+    if token:
+        return token.group(1)
+
+    return clean[:11]
+
+def get_fallback_data():
+    """Load local pre-staged CSV files for reliable fallback if offline or no key."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     sample_dir = os.path.join(base_dir, "sample_data")
+    filepath = os.path.join(sample_dir, "tutorial_loved.csv")
     
-    file_map = {
-        "controversial": ("controversial_keynote.csv", {
-            "title": "Tech Keynote: Next-Gen Subscription & Price Hike Announcement",
-            "channel": "TechCorp Global",
-            "views": 3120400,
-            "likes": 185000,
-            "comment_count": 18400
-        }),
-        "tutorial_loved": ("tutorial_loved.csv", {
-            "title": "PySpark Masterclass: Distributed Data Processing from Scratch",
-            "channel": "Data Engineering Academy",
-            "views": 1520000,
-            "likes": 135200,
-            "comment_count": 8920
-        }),
-        "crypto_spam": ("crypto_spam.csv", {
-            "title": "Crypto Market Bull Run Analysis & Price Forecast",
-            "channel": "Market Pulse Live",
-            "views": 890000,
-            "likes": 14500,
-            "comment_count": 14800
-        })
+    meta = {
+        "title": "PySpark Masterclass: Distributed Data Processing from Scratch",
+        "channel": "Data Engineering Academy",
+        "views": 1520000,
+        "likes": 135200,
+        "comment_count": 8920
     }
-    
-    filename, meta = file_map.get(scenario_type, file_map["controversial"])
-    filepath = os.path.join(sample_dir, filename)
     
     if os.path.exists(filepath):
         df = pd.read_csv(filepath)
@@ -69,36 +98,60 @@ def get_fallback_data(scenario_type: str = "controversial"):
         ])
     return meta, df
 
-def fetch_youtube_comments(video_id: str, max_comments: int = 500, api_key: str = None):
+def _http_get_json(url: str):
+    """Executes an HTTPS GET request using Python standard library urllib."""
+    req = Request(url, headers={"User-Agent": "TubePulse/1.0 (Windows NT 10.0)"})
+    with urlopen(req, timeout=12) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+def fetch_youtube_comments(video_id: str, max_comments: int = 500, api_key: str = None, on_progress=None, **kwargs):
     """
-    Fetches real-time comments from YouTube Data API v3 if API key is provided
-    or present in the environment (YOUTUBE_API_KEY).
-    Otherwise, automatically selects the matching pre-staged scenario.
+    Fetches real-time comments from YouTube Data API v3 using standard library urllib.
+    Zero external client library required.
+    Returns: (video_meta, comments_df, error_message)
     """
-    api_key = api_key or os.getenv("YOUTUBE_API_KEY", "").strip()
+    api_key = (api_key or get_api_key()).strip()
     
     if not api_key:
-        if any(k in video_id.lower() for k in ["tutorial", "loved", "spark", "dqw4w9"]):
-            return get_fallback_data("tutorial_loved")
-        elif any(k in video_id.lower() for k in ["crypto", "spam", "trap", "x7k90v"]):
-            return get_fallback_data("crypto_spam")
-        else:
-            return get_fallback_data("controversial")
+        if on_progress:
+            on_progress(30, "No API key detected in .env. Serving fallback benchmark...")
+        meta, df = get_fallback_data()
+        return meta, df, "No API key found in .env. Showing benchmark dataset."
             
     try:
-        from googleapiclient.discovery import build
-        youtube = build('youtube', 'v3', developerKey=api_key)
+        if on_progress:
+            on_progress(10, f"Querying YouTube Data API v3 for ID: {video_id}...")
+
+        # 1. Fetch Video Metadata via REST endpoint
+        meta_url = (
+            f"https://www.googleapis.com/youtube/v3/videos"
+            f"?part=snippet,statistics"
+            f"&id={video_id}"
+            f"&key={api_key}"
+        )
         
-        # 1. Fetch Video Metadata
-        video_response = youtube.videos().list(
-            part="snippet,statistics",
-            id=video_id
-        ).execute()
-        
-        if not video_response.get("items"):
-            return get_fallback_data("controversial")
-            
-        video_item = video_response["items"][0]
+        try:
+            meta_json = _http_get_json(meta_url)
+        except HTTPError as e:
+            err_body = e.read().decode('utf-8', errors='ignore')
+            if "quotaExceeded" in err_body:
+                err_msg = "Google YouTube Data API daily quota limit exceeded."
+            elif "API_KEY_INVALID" in err_body or "keyInvalid" in err_body:
+                err_msg = "YouTube API key is invalid. Please check your .env file."
+            elif "accessNotConfigured" in err_body:
+                err_msg = "YouTube Data API v3 is not enabled in your Google Cloud project."
+            else:
+                err_msg = f"YouTube API Error ({e.code}): {e.reason}"
+            meta, df = get_fallback_data()
+            return meta, df, err_msg
+
+        items = meta_json.get("items", [])
+        if not items:
+            err_msg = f"No video found on YouTube with ID '{video_id}'."
+            meta, df = get_fallback_data()
+            return meta, df, err_msg
+
+        video_item = items[0]
         meta = {
             "title": video_item["snippet"]["title"],
             "channel": video_item["snippet"]["channelTitle"],
@@ -106,22 +159,48 @@ def fetch_youtube_comments(video_id: str, max_comments: int = 500, api_key: str 
             "likes": int(video_item["statistics"].get("likeCount", 0)),
             "comment_count": int(video_item["statistics"].get("commentCount", 0))
         }
-        
+
+        if on_progress:
+            on_progress(25, f"Retrieved: {meta['title'][:40]}... Ingesting comment stream...")
+
         # 2. Fetch Comments (Paginated)
         comments = []
         next_page_token = None
-        
+        error_notice = None
+
         while len(comments) < max_comments:
-            req = youtube.commentThreads().list(
-                part="snippet",
-                videoId=video_id,
-                maxResults=min(100, max_comments - len(comments)),
-                pageToken=next_page_token,
-                textFormat="plainText"
+            batch_size = min(100, max_comments - len(comments))
+            cmnt_url = (
+                f"https://www.googleapis.com/youtube/v3/commentThreads"
+                f"?part=snippet"
+                f"&videoId={video_id}"
+                f"&maxResults={batch_size}"
+                f"&textFormat=plainText"
+                f"&key={api_key}"
             )
-            res = req.execute()
-            
-            for item in res.get("items", []):
+            if next_page_token:
+                cmnt_url += f"&pageToken={quote(next_page_token)}"
+
+            try:
+                cmnt_json = _http_get_json(cmnt_url)
+            except HTTPError as he:
+                err_body = he.read().decode('utf-8', errors='ignore')
+                if "commentsDisabled" in err_body:
+                    error_notice = "Comments are disabled by the creator on this video (common on YouTube Music tracks)."
+                elif "quotaExceeded" in err_body:
+                    error_notice = "Daily quota reached on YouTube Data API."
+                else:
+                    error_notice = f"Comment Fetch Notice ({he.code}): {he.reason}"
+                break
+            except Exception as ex:
+                error_notice = f"Comment Ingestion Notice: {str(ex)[:40]}"
+                break
+
+            cmnt_items = cmnt_json.get("items", [])
+            if not cmnt_items:
+                break
+
+            for item in cmnt_items:
                 snippet = item["snippet"]["topLevelComment"]["snippet"]
                 comments.append({
                     "author": snippet.get("authorDisplayName", "Anonymous"),
@@ -129,17 +208,31 @@ def fetch_youtube_comments(video_id: str, max_comments: int = 500, api_key: str 
                     "like_count": int(snippet.get("likeCount", 0)),
                     "published_at": snippet.get("publishedAt", "")
                 })
-                
-            next_page_token = res.get("nextPageToken")
+
+            if on_progress:
+                pct = 25 + int((len(comments) / max_comments) * 28)
+                on_progress(min(52, pct), f"Harvested {len(comments)} comments from YouTube...")
+
+            next_page_token = cmnt_json.get("nextPageToken")
             if not next_page_token:
                 break
-                
+
+        # If zero comments were fetched
+        if not comments:
+            if not error_notice:
+                error_notice = "This video has zero public comments."
+            df = pd.DataFrame([{
+                "author": meta["channel"],
+                "text": f"Video {meta['title']} currently has no public comments.",
+                "like_count": meta["likes"],
+                "published_at": ""
+            }])
+            return meta, df, error_notice
+
         df = pd.DataFrame(comments)
-        if df.empty:
-            return get_fallback_data("controversial")
-            
-        return meta, df
-        
+        return meta, df, error_notice
+
     except Exception as e:
-        print(f"[YouTube API] {e}. Using pre-staged dataset.")
-        return get_fallback_data("controversial")
+        error_msg = f"API Connection Error: {str(e)}"
+        meta, df = get_fallback_data()
+        return meta, df, error_msg

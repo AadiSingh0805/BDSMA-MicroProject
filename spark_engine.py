@@ -63,7 +63,6 @@ def compute_vader_score(text: str) -> float:
         return 0.0
     if _sia:
         return float(_sia.polarity_scores(text)['compound'])
-    # Heuristic fallback if NLTK is unavailable
     pos_words = {'great', 'best', 'love', 'helpful', 'clearest', 'good', 'awesome', 'amazing', 'thank'}
     neg_words = {'bad', 'broken', 'worst', 'misleading', 'hate', 'refund', 'unacceptable', 'disappointed'}
     words = set(text.lower().split())
@@ -109,36 +108,27 @@ def calculate_discrepancy_index(views: int, likes: int, mean_compound: float, sp
     """
     Computes the Audience Discrepancy Index.
     Compares the public Like-to-View ratio against the true Comment Sentiment score.
-    Detects clickbait, misleading thumbnails, or videos with inflated likes vs hostile comments.
     """
     if views <= 0:
         views = 1
     
     like_ratio_pct = (likes / views) * 100
-    # Expected baseline: Normal video like-to-view ratio is around 3.0% to 6.0%
-    # Normalized sentiment percentage: maps [-1.0, 1.0] to [0.0, 100.0]
     sentiment_pct = ((mean_compound + 1.0) / 2.0) * 100.0
-    
-    # Discrepancy occurs when like ratio is high/normal, but sentiment is low or negative
-    # E.g., Like ratio = 6%, but sentiment_pct is 30% (strongly negative)
-    # Normalized gap:
     expected_sentiment = min(100.0, max(20.0, like_ratio_pct * 12.0))
     raw_gap = expected_sentiment - sentiment_pct
-    
-    # Adjust for spam ratio inflating comment volume
     discrepancy_score = int(np.clip(raw_gap * 1.2 + (spam_ratio * 0.5), 5, 95))
     
     if discrepancy_score >= 70:
         status = "HIGH DISCREPANCY"
-        color = "#f43f5e" # Rose/Red
+        color = "#f43f5e"
         desc = "Suspiciously high public engagement despite strong audience pushback & negative comment sentiment!"
     elif discrepancy_score >= 45:
         status = "MODERATE DISCREPANCY"
-        color = "#f59e0b" # Amber
+        color = "#f59e0b"
         desc = "Noticeable divergence between like volume and comment feedback topics."
     else:
         status = "ALIGNED RECEPTION"
-        color = "#10b981" # Emerald Green
+        color = "#10b981"
         desc = "Strong consensus: public likes closely match enthusiastic positive comment sentiment."
         
     return {
@@ -150,16 +140,18 @@ def calculate_discrepancy_index(views: int, likes: int, mean_compound: float, sp
         "sentiment_pct": round(sentiment_pct, 1)
     }
 
-def run_pyspark_pipeline(comments_df: pd.DataFrame, views: int, likes: int):
+def run_pyspark_pipeline(comments_df: pd.DataFrame, views: int, likes: int, on_progress=None, **kwargs):
     """
-    Executes the distributed comment mining pipeline.
+    Executes the distributed comment mining pipeline with real progress updates.
     Uses PySpark DataFrame & UDF if PySpark is initialized,
     or high-speed vectorized fallbacks with the exact same distributed schema.
     """
     engine_name = "PySpark Cluster Engine v3.5 (Local Execution Mode)"
     
+    if on_progress:
+        on_progress(55, "Partitioning comment batch across PySpark worker cores...")
+        
     try:
-        # Check if pyspark is available and can create a session
         from pyspark.sql import SparkSession
         from pyspark.sql.functions import udf, col
         from pyspark.sql.types import FloatType, BooleanType, StringType
@@ -172,27 +164,41 @@ def run_pyspark_pipeline(comments_df: pd.DataFrame, views: int, likes: int):
             
         spark_df = spark.createDataFrame(comments_df)
         
-        # Define PySpark UDFs
+        if on_progress:
+            on_progress(65, "Executing distributed regex text sanitization...")
+            
         clean_udf = udf(clean_text, StringType())
         vader_udf = udf(compute_vader_score, FloatType())
         spam_udf = udf(is_spam, BooleanType())
         
-        # Apply Distributed Transformations
+        if on_progress:
+            on_progress(75, "Scoring comment polarity via PySpark VADER UDF...")
+            
         spark_transformed = spark_df \
             .withColumn("clean_text", clean_udf(col("text"))) \
             .withColumn("compound", vader_udf(col("clean_text"))) \
             .withColumn("is_spam", spam_udf(col("text")))
             
-        # Collect back transformed data
         processed_df = spark_transformed.toPandas()
         
-    except Exception as e:
-        # Graceful fallback to Pandas/NLTK engine with identical schema
+    except Exception:
         engine_name = "PySpark Fallback Mode (Vectorized Python/NLTK)"
         processed_df = comments_df.copy()
+        
+        if on_progress:
+            on_progress(65, "Sanitizing text (removing emojis, URLs, and punctuation)...")
         processed_df["clean_text"] = processed_df["text"].apply(clean_text)
+        
+        if on_progress:
+            on_progress(78, "Scoring comment polarity using VADER compound lexicon...")
         processed_df["compound"] = processed_df["clean_text"].apply(compute_vader_score)
+        
+        if on_progress:
+            on_progress(88, "Scanning comments against spam and fraud bot regex patterns...")
         processed_df["is_spam"] = processed_df["text"].apply(is_spam)
+
+    if on_progress:
+        on_progress(92, "Aggregating polarity distributions & isolating clean vs spam ratios...")
 
     # Classify polarity categories
     def categorize_polarity(row):
@@ -208,17 +214,12 @@ def run_pyspark_pipeline(comments_df: pd.DataFrame, views: int, likes: int):
             
     processed_df["category"] = processed_df.apply(categorize_polarity, axis=1)
 
-    # Calculate Distributions
-    total_comments = len(processed_df)
-    if total_comments == 0:
-        total_comments = 1
-        
+    total_comments = len(processed_df) if len(processed_df) > 0 else 1
     spam_count = int(processed_df["is_spam"].sum())
     clean_count = total_comments - spam_count
     spam_ratio = round((spam_count / total_comments) * 100, 1)
     clean_ratio = round(100.0 - spam_ratio, 1)
 
-    # Valid non-spam comments for sentiment
     valid_comments = processed_df[~processed_df["is_spam"]]
     if len(valid_comments) > 0:
         pos_count = (valid_comments["category"] == "Positive").sum()
@@ -233,11 +234,18 @@ def run_pyspark_pipeline(comments_df: pd.DataFrame, views: int, likes: int):
         pos_pct, neu_pct, neg_pct = 33.3, 33.3, 33.3
         mean_compound = 0.0
 
-    # Extract Bigrams
+    if on_progress:
+        on_progress(96, "Mining recurring 2-word keyphrases (TF-IDF Bigrams)...")
+        
     bigram_labels, bigram_freqs = extract_bigrams(processed_df["clean_text"], top_n=6)
 
-    # Compute Audience Discrepancy Index
+    if on_progress:
+        on_progress(99, "Computing Audience Discrepancy Index...")
+        
     discrepancy = calculate_discrepancy_index(views, likes, mean_compound, spam_ratio)
+
+    if on_progress:
+        on_progress(100, "Analytics pipeline complete.")
 
     return {
         "engine_name": engine_name,
@@ -257,4 +265,3 @@ def run_pyspark_pipeline(comments_df: pd.DataFrame, views: int, likes: int):
         "bigram_freqs": bigram_freqs,
         "discrepancy": discrepancy
     }
-

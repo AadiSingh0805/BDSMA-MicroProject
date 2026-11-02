@@ -6,20 +6,27 @@ Visuals: Plotly & Streamlit
 """
 
 import os
+import importlib
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from youtube_api import extract_video_id, fetch_youtube_comments, get_fallback_data
+
+import youtube_api
+import spark_engine
+importlib.reload(youtube_api)
+importlib.reload(spark_engine)
+
+from youtube_api import extract_video_id, fetch_youtube_comments, get_fallback_data, get_api_key
 from spark_engine import run_pyspark_pipeline
 
-# Page Setup: Clean & Focused
+# Page Setup
 st.set_page_config(
     page_title="TubePulse - Audience Feedback Analytics",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Custom High-End Minimalist Dark Stylesheet (Zero Clutter, Zero Emojis)
+# Minimalist Dark Stylesheet
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
@@ -34,7 +41,6 @@ st.markdown("""
         background-color: #090d16;
     }
 
-    /* Minimalist Cards */
     .metric-card {
         background: #0f172a;
         border: 1px solid rgba(255, 255, 255, 0.08);
@@ -70,7 +76,6 @@ st.markdown("""
         font-family: 'Fira Code', monospace;
     }
 
-    /* Comment row styling */
     .comment-item {
         background: #0d1527;
         border: 1px solid rgba(255, 255, 255, 0.06);
@@ -79,7 +84,6 @@ st.markdown("""
         margin-bottom: 8px;
     }
 
-    /* Button Styling */
     .stButton > button {
         background: #0284c7 !important;
         color: #ffffff !important;
@@ -92,7 +96,6 @@ st.markdown("""
         background: #0369a1 !important;
     }
 
-    /* Remove Streamlit default whitespace */
     .block-container {
         padding-top: 1.8rem !important;
         padding-bottom: 2rem !important;
@@ -105,60 +108,102 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Application Header (Clean & Monochromatic)
+api_key = get_api_key()
+
+# Application Header
 h_left, h_right = st.columns([8, 4])
 with h_left:
     st.markdown("<h2 style='margin:0; font-weight:700; color:#f8fafc; letter-spacing:-0.5px;'>TubePulse</h2>", unsafe_allow_html=True)
     st.markdown("<p style='margin:0 0 16px 0; font-size:0.875rem; color:#94a3b8;'>Large-Scale Comment Sentiment Mining & Audience Reception Analytics</p>", unsafe_allow_html=True)
+
 with h_right:
-    st.markdown("<div style='text-align:right; font-family:Fira Code; font-size:0.75rem; color:#38bdf8; margin-top:8px;'>ENGINE: PySpark 3.5 & VADER UDF</div>", unsafe_allow_html=True)
+    api_color = "#10b981" if api_key else "#64748b"
+    api_label = "API: Live Connected (.env)" if api_key else "API: Offline Benchmark"
+    st.markdown(f"""
+    <div style='text-align:right; font-family:Fira Code; font-size:0.75rem; margin-top:8px;'>
+        <span style='color:{api_color}; margin-right:12px;'>● {api_label}</span>
+        <span style='color:#38bdf8;'>PySpark 3.5 Engine</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-# Control Bar: Video URL / Scenario Selection
-c_input, c_preset, c_btn = st.columns([6, 4, 2])
-
-with c_preset:
-    scenario_selection = st.selectbox(
-        "Evaluation Dataset:",
-        [
-            "Controversial Keynote (High Discrepancy)",
-            "Engineering Tutorial (High Positive)",
-            "Crypto Infiltration (High Spam Ratio)"
-        ],
-        label_visibility="collapsed"
-    )
-
-preset_defaults = {
-    "Controversial Keynote (High Discrepancy)": ("kY4L4z3YVb8", "controversial"),
-    "Engineering Tutorial (High Positive)": ("dQw4w9WgXcQ", "tutorial_loved"),
-    "Crypto Infiltration (High Spam Ratio)": ("x7K90vBnM21", "crypto_spam")
-}
-
-selected_id, selected_slug = preset_defaults[scenario_selection]
+# Search Input Bar
+c_input, c_btn = st.columns([9, 3])
 
 with c_input:
     url_input = st.text_input(
         "YouTube Video URL or ID:",
-        value=f"https://www.youtube.com/watch?v={selected_id}",
+        value="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        placeholder="Paste any YouTube URL (e.g. https://www.youtube.com/watch?v=...)",
         label_visibility="collapsed"
     )
 
 with c_btn:
     analyze_trigger = st.button("Run Analytics", use_container_width=True)
 
-# Resolve Target ID
-target_id = extract_video_id(url_input) if url_input else selected_id
+target_id = extract_video_id(url_input)
 
-# Fetch Data
-api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+# Initialize Session State
+if "analyzed_target_id" not in st.session_state:
+    st.session_state.analyzed_target_id = None
+    st.session_state.pipeline_results = None
+    st.session_state.video_meta = None
+    st.session_state.raw_comments = None
+    st.session_state.api_notice = None
 
-if api_key and url_input and target_id not in ["kY4L4z3YVb8", "dQw4w9WgXcQ", "x7K90vBnM21"]:
-    video_meta, raw_comments = fetch_youtube_comments(target_id, max_comments=500, api_key=api_key)
-else:
-    # Use selected pre-staged dataset
-    video_meta, raw_comments = get_fallback_data(selected_slug)
+# Determine if we should trigger a new analysis
+needs_analysis = (
+    analyze_trigger or 
+    st.session_state.analyzed_target_id != target_id or 
+    st.session_state.pipeline_results is None
+)
 
-# Execute PySpark Sentiment Pipeline
-pipeline_results = run_pyspark_pipeline(raw_comments, video_meta["views"], video_meta["likes"])
+if needs_analysis:
+    progress_placeholder = st.empty()
+    status_placeholder = st.empty()
+
+    def handle_progress(pct: int, msg: str):
+        progress_placeholder.progress(pct)
+        status_placeholder.markdown(
+            f"<div style='font-family:Fira Code; font-size:0.78rem; color:#38bdf8; margin: 4px 0 12px 0;'>[{pct}%] {msg}</div>",
+            unsafe_allow_html=True
+        )
+
+    # Ingestion
+    video_meta, raw_comments, api_notice = fetch_youtube_comments(
+        target_id,
+        max_comments=500,
+        api_key=api_key,
+        on_progress=handle_progress
+    )
+
+    # PySpark Processing
+    results = run_pyspark_pipeline(
+        raw_comments,
+        video_meta["views"],
+        video_meta["likes"],
+        on_progress=handle_progress
+    )
+
+    # Clear Progress Bar
+    progress_placeholder.empty()
+    status_placeholder.empty()
+
+    # Cache into session state
+    st.session_state.analyzed_target_id = target_id
+    st.session_state.pipeline_results = results
+    st.session_state.video_meta = video_meta
+    st.session_state.raw_comments = raw_comments
+    st.session_state.api_notice = api_notice
+
+# Retrieve cached results
+pipeline_results = st.session_state.pipeline_results
+video_meta = st.session_state.video_meta
+raw_comments = st.session_state.raw_comments
+api_notice = st.session_state.api_notice
+
+# Show API Notice / Warning if applicable
+if api_notice:
+    st.warning(f"**Notice:** {api_notice}")
 
 # Video Player & Core KPI Metrics Section
 col_player, col_kpis = st.columns([5, 7])
@@ -251,7 +296,7 @@ with col_left:
     )
     st.plotly_chart(donut_fig, use_container_width=True)
     
-    # Clean distribution breakdown
+    # Distribution breakdown pills
     p1, p2, p3 = st.columns(3)
     p1.markdown(f"<div style='text-align:center; padding:8px; background:#0f172a; border-radius:6px;'><div style='font-size:0.7rem; color:#10b981; font-weight:600;'>POSITIVE</div><div style='font-family:Fira Code; font-size:1.1rem; font-weight:700;'>{split['positive']}%</div></div>", unsafe_allow_html=True)
     p2.markdown(f"<div style='text-align:center; padding:8px; background:#0f172a; border-radius:6px;'><div style='font-size:0.7rem; color:#94a3b8; font-weight:600;'>NEUTRAL</div><div style='font-family:Fira Code; font-size:1.1rem; font-weight:700;'>{split['neutral']}%</div></div>", unsafe_allow_html=True)
@@ -281,7 +326,7 @@ with col_right:
     )
     st.plotly_chart(bar_fig, use_container_width=True)
 
-    # Spam Telemetry
+    # Spam Telemetry Indicator
     spam_pct = pipeline_results['spam_ratio']
     spam_count = pipeline_results['spam_count']
     clean_count = pipeline_results['clean_count']
@@ -328,7 +373,7 @@ else:
 
 display_df = display_df.sort_values(by="like_count", ascending=False)
 
-for _, row in display_df.head(5).iterrows():
+for _, row in display_df.head(6).iterrows():
     color = "#10b981" if row["category"] == "Positive" else ("#f43f5e" if row["category"] == "Negative" else "#64748b")
     st.markdown(f"""
     <div class="comment-item">
