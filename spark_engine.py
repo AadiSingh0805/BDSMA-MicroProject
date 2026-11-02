@@ -1,5 +1,5 @@
 """
-TubePulse - PySpark Distributed Engine & NLP Analytics Module
+Sentube - PySpark Distributed Engine & NLP Analytics Module
 Implements:
 1. Regex text sanitization & tokenization
 2. NLTK VADER / TextBlob UDF Polarity Scoring
@@ -157,7 +157,7 @@ def run_pyspark_pipeline(comments_df: pd.DataFrame, views: int, likes: int, on_p
         from pyspark.sql.types import FloatType, BooleanType, StringType
         
         spark = SparkSession.builder \
-            .appName("TubePulse-Sentiment-Engine") \
+            .appName("Sentube-Sentiment-Engine") \
             .master("local[*]") \
             .config("spark.ui.showConsoleProgress", "false") \
             .getOrCreate()

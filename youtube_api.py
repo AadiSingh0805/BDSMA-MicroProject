@@ -1,5 +1,5 @@
 """
-TubePulse - YouTube Data API v3 Ingestion Module
+Sentube - YouTube Data API v3 Ingestion Module
 Handles video metadata retrieval, embeddable video catalog, and paginated comment ingestion.
 Guarantees 100% playable videos with third-party iframe embedding enabled.
 """
@@ -253,7 +253,7 @@ VERIFIED_EMBEDDABLE_FEED = [
 
 def _http_get_json(url: str):
     """Executes an HTTPS GET request using Python standard library urllib."""
-    req = Request(url, headers={"User-Agent": "TubePulse/1.0 (Windows NT 10.0)"})
+    req = Request(url, headers={"User-Agent": "Sentube/1.0 (Windows NT 10.0)"})
     with urlopen(req, timeout=12) as response:
         return json.loads(response.read().decode("utf-8"))
 

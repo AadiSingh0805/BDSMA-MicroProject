@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TubePulse | Distributed YouTube Comment Sentiment Mining & Feedback Analytics</title>
+  <title>Sentube | Distributed YouTube Comment Sentiment Mining & Feedback Analytics</title>
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -537,7 +537,7 @@
 <span class="text-pulse-purple">from</span> nltk.sentiment.vader <span class="text-pulse-purple">import</span> SentimentIntensityAnalyzer
 
 <span class="text-slate-500"># 1. Initialize PySpark Distributed Session</span>
-spark = SparkSession.builder.appName(<span class="text-pulse-emerald">"TubePulse-Sentiment-Engine"</span>).master(<span class="text-pulse-emerald">"local[*]"</span>).getOrCreate()
+spark = SparkSession.builder.appName(<span class="text-pulse-emerald">"Sentube-Sentiment-Engine"</span>).master(<span class="text-pulse-emerald">"local[*]"</span>).getOrCreate()
 
 <span class="text-slate-500"># 2. Distributed Text Sanitization (Emoji, URLs, Punctuation)</span>
 df_clean = df.withColumn(<span class="text-pulse-emerald">"clean_text"</span>, 
@@ -664,7 +664,7 @@ discrepancy_index = abs((likes / views * 100) - ((mean_sentiment + 1) / 2 * 100)
               BDSMA Evaluation Rubric Alignment
             </h2>
             <p class="text-slate-300 text-sm leading-relaxed mb-6">
-              TubePulse directly satisfies Big Data Systems & Management Analytics academic requirements:
+              Sentube directly satisfies Big Data Systems & Management Analytics academic requirements:
             </p>
 
             <ul class="space-y-3 text-sm text-slate-300">
@@ -718,7 +718,7 @@ discrepancy_index = abs((likes / views * 100) - ((mean_sentiment + 1) / 2 * 100)
         <div class="w-8 h-8 rounded-lg bg-pulse-cyan/10 border border-pulse-cyan/30 flex items-center justify-center text-pulse-cyan">
           <i data-lucide="activity" class="w-4 h-4"></i>
         </div>
-        <span class="text-base font-bold text-white">TubePulse <span class="text-xs font-mono text-slate-500">| BDSMA Micro-Project</span></span>
+        <span class="text-base font-bold text-white">Sentube <span class="text-xs font-mono text-slate-500">| BDSMA Micro-Project</span></span>
       </div>
       <p class="text-xs text-slate-500 font-mono text-center md:text-right">
         Engineered with PySpark, YouTube Data API v3, NLTK VADER & Streamlit.

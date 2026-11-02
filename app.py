@@ -1,5 +1,5 @@
 """
-TubePulse: Large-Scale Comment Sentiment Mining and Audience Feedback Analytics
+Sentube: Large-Scale Comment Sentiment Mining and Audience Feedback Analytics
 Distributed Processing: PySpark SQL & UDF
 NLP: NLTK VADER Lexicon & TF-IDF Bigrams
 Visuals: Plotly & Streamlit
@@ -21,7 +21,7 @@ from spark_engine import run_pyspark_pipeline
 
 # Page Setup
 st.set_page_config(
-    page_title="TubePulse - Browse & Audience Feedback Analytics",
+    page_title="Sentube - Browse & Audience Feedback Analytics",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -258,7 +258,7 @@ with nav_col1:
     st.markdown("""
     <div style="display:flex; align-items:center; gap:8px;">
         <span style="font-size:1.4rem; font-weight:800; color:#f8fafc; letter-spacing:-0.5px; line-height:1;">
-            Tube<span style="color:#38bdf8;">Pulse</span>
+            Sen<span style="color:#38bdf8;">tube</span>
         </span>
         <span style="font-family:'Fira Code'; font-size:0.68rem; color:#64748b; background:#0f172a; border:1px solid rgba(255,255,255,0.08); padding:2px 6px; border-radius:4px; white-space:nowrap;">
             PySpark 3.5

@@ -1,4 +1,4 @@
-# TubePulse ⚡
+# Sentube ⚡
 ### Large-Scale Comment Sentiment Mining and Audience Feedback Analytics Using PySpark and YouTube Data API v3
 
 > **BDSMA Academic Micro-Project**  
@@ -7,7 +7,7 @@
 ---
 
 ## 📖 Overview
-**TubePulse** is an automated big data analytics system engineered to evaluate genuine audience reception on YouTube at scale. By querying the YouTube Data API v3, TubePulse ingests thousands of public comments and partitions the workload across a distributed **PySpark** cluster. 
+**Sentube** is an automated big data analytics system engineered to evaluate genuine audience reception on YouTube at scale. By querying the YouTube Data API v3, Sentube ingests thousands of public comments and partitions the workload across a distributed **PySpark** cluster. 
 
 The engine strips noise (emojis, URLs, punctuation), maps sentiment polarity via a VADER User-Defined Function (UDF), flags commercial bot spam, extracts key recurring bigrams (e.g. *"audio quality"*, *"explained well"*, *"price hike"*), and calculates the **Audience Discrepancy Index**—detecting videos with artificially inflated like counts or misleading thumbnails that harbor hostile comments.
 
